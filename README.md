@@ -1,0 +1,116 @@
+<h2 align="center">PIM-Sleep: A Physiology-Informed Sleep Foundation Model for Tasks Across Multiple Timescales</h2>
+
+<p align="center">
+  Morphological event-guided EEG/EOG representation learning for sleep staging, sleep disorder classification, and spindle detection.
+</p>
+
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11"></a>
+  <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-2.4%2B-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch 2.4+"></a>
+  <img src="https://img.shields.io/badge/Modalities-EEG%20%2B%20EOG-blue" alt="EEG and EOG">
+  <img src="https://img.shields.io/badge/Tasks-Multiscale%20Sleep%20Analysis-green" alt="Multiscale sleep analysis">
+</p>
+
+## Introduction
+
+PIM-Sleep learns multimodal EEG/EOG representations under physiological event supervision. Convolutional encoders produce 30-second epoch tokens, and a shared Transformer models their temporal context.
+
+Pretraining combines full-event prediction with BERT-style masked-event prediction. The masked branch detaches epoch embeddings to train contextual inference. The pretrained backbone supports three tasks at the epoch, whole-night, and sample levels.
+
+## Highlights
+
+- **Physiologically interpretable pretraining:** alpha activity, slow waves, sleep spindles, rapid eye movements, vertex sharp waves, and K-complexes serve as six physiological semantic anchors for EEG/EOG representation learning.
+- **AASM-informed physiological supervision:** YASA and rule-based detectors incorporate American Academy of Sleep Medicine (AASM) physiological criteria, including waveform morphology, frequency, duration, amplitude, and sleep-stage dependence.
+- **Multimodal context:** one EEG channel and bilateral EOG, with 20-epoch windows and missing-channel gating.
+- **Cross-scale transfer:** TCN sleep staging, stage-wise/architecture disorder classification, and temporal spindle detection.
+
+## Repository Structure
+
+```text
+PIM-Sleep/
+├── model/
+│   ├── morphology_detector_yasa.py
+│   ├── sleeppreprocessing_mass.py
+│   ├── sleeppreprocessing_isruc.py
+│   ├── sleeppreprocessing_dreams.py
+│   ├── sleeppreprocessing_cap.py
+│   ├── sleeppreprocessing_morphologicalclas.py
+│   ├── sleeppreprocessing_bp_slp.py
+│   ├── sleep_representation_learning.py
+│   └── multi_task_transfer.py
+├── requirements.txt
+└── README.md
+```
+
+`CLAS` and `BP_SLP` are the code's internal names for CUITS and BP-SleepX. The preprocessing scripts share `morphology_detector_yasa.py`.
+
+## Getting Started
+
+Use Python 3.11 in a virtual environment:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+For GPU training, install the appropriate PyTorch build using the [official guide](https://pytorch.org/get-started/locally/). YASA is pinned to **0.7.0** to support both Hypnogram-based detection and the scripts' `predict_proba()` calls.
+
+### Datasets
+
+- [MASS-SS3](https://doi.org/10.5683/SP3/9MYUCS) and [ISRUC-SLEEP](https://sleeptight.isr.uc.pt/): pretraining.
+- [DREAMS](https://zenodo.org/records/2650142): staging, spindle detection, and healthy controls.
+- [CAP](https://archive.physionet.org/pn6/capslpdb/): HC/NFLE/RBD disorder classification.
+- **CUITS and BP-SleepX:** staging and spindle detection; contact the authors for access conditions.
+
+### Data Preparation
+
+Edit each preprocessing script's input/output paths, then run the required dataset scripts. For example:
+
+```bash
+python model/sleeppreprocessing_mass.py
+python model/sleeppreprocessing_isruc.py
+```
+
+The scripts resample signals to **100 Hz** and save `<subject_id>_morphology.npz` files with EEG/EOG epochs, channel availability, event features, and reference stages.
+
+```text
+Signals: [num_epochs, 3, 3000]   # EEG, left EOG, right EOG
+Windows: [batch_size, 20, 3, 3000]
+Stages:  0=W, 1=N1, 2=N2, 3=N3, 4=REM
+```
+
+## Training and Evaluation
+
+Run commands from the repository root.
+
+### Pretraining
+
+Set `EEGPretrainConfig.pretrain_dirs` and `output_dir` in `model/sleep_representation_learning.py`:
+
+```bash
+python model/sleep_representation_learning.py
+```
+
+Defaults: 30 epochs, batch size 8, AdamW, learning rate 8e-5, and loss `Full BCE + 0.05 × Masked BCE`. Subject-level validation selects the checkpoint by full-event BCE. The backbone is saved as `sleep_eeg_bert_backbone_pretrained.pt`.
+
+### Downstream Tasks
+
+In `FinetuneConfig` in `model/multi_task_transfer.py`, set `eeg_pretrained_model_path`, data paths, and output paths. Enable one task and disable the other `run_*` flags:
+
+| Task | Enable | Evaluation |
+|---|---|---|
+| Sleep staging | `run_sleep_stage_classification` | Subject LOSO; TCN head; overlapping-window aggregation and gated Viterbi |
+| Disorder classification | `run_sleep_disorder_classification` | Four-fold subject CV, repeated with seeds 35–44 |
+| Spindle detection | `run_spindle_detection` | Subject LOSO; 3-second frames; N2 sample-level labels |
+
+```bash
+python model/multi_task_transfer.py
+```
+
+Disorder classification uses **reference sleep stages**, stage-wise PCA/RF models, and a sleep-architecture logistic model. Parameters, fusion weights, and class decision multipliers are selected through inner CV.
+
+The current spindle entry uses **35 CUITS/CLAS subjects**, C3-A1 signals, and matched `Base_SLPxxx_morphology.npz` / `Base_SLPxxx_Spindle.txt` files. Its defaults are **2 training epochs and IoU 0.6**. For the manuscript's primary metric, set `spindle_primary_iou_threshold=0.3` and include `0.3` in `spindle_report_iou_thresholds`. Other spindle datasets require their corresponding loader configuration.
+
+## Acknowledgments
+
+Built with [PyTorch](https://pytorch.org/), [MNE-Python](https://mne.tools/), [YASA](https://github.com/raphaelvallat/yasa), and [scikit-learn](https://scikit-learn.org/).
+
